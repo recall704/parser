@@ -995,7 +995,6 @@ import (
 	CharacteristicOptionList               "Function or Procedure characteristic option list"
 	CharacteristicOption                   "Function or Procedure characteristic option"
 	DeterministicOrNotOp                   "Deterministic or not"
-	RoutineBody                            "Function or Procedure routine body"
 	GetFormatSelector                      "{DATE|DATETIME|TIME|TIMESTAMP}"
 	GlobalScope                            "The scope of variable"
 	GroupByClause                          "GROUP BY clause"
@@ -1196,7 +1195,8 @@ import (
 	ViewDefiner                            "view definer"
 	ViewName                               "view name"
 	ViewFieldList                          "create view statement field list"
-	ViewSQLSecurity                        "view sql security"
+	SQLSecurity                            "sql security"
+	ViewSQLSecurityOpt                     "view sql security opt"
 	WhereClause                            "WHERE clause"
 	WhereClauseOptional                    "Optional WHERE clause"
 	WhenClause                             "When clause"
@@ -4021,7 +4021,7 @@ LikeTableWithOrWithoutParen:
  *          as select Col1,Col2 from table WITH LOCAL CHECK OPTION
  *******************************************************************/
 CreateViewStmt:
-	"CREATE" OrReplace ViewAlgorithm ViewDefiner ViewSQLSecurity "VIEW" ViewName ViewFieldList "AS" CreateViewSelectOpt ViewCheckOption
+	"CREATE" OrReplace ViewAlgorithm ViewDefiner ViewSQLSecurityOpt "VIEW" ViewName ViewFieldList "AS" CreateViewSelectOpt ViewCheckOption
 	{
 		startOffset := parser.startOffset(&yyS[yypt-1])
 		selStmt := $10.(ast.StmtNode)
@@ -4085,12 +4085,18 @@ ViewDefiner:
 		$$ = $3
 	}
 
-ViewSQLSecurity:
+ViewSQLSecurityOpt:
 	/* EMPTY */
 	{
 		$$ = model.SecurityDefiner
 	}
-|	"SQL" "SECURITY" "DEFINER"
+|	SQLSecurity
+	{
+		$$ = $1
+	}
+
+SQLSecurity:
+	"SQL" "SECURITY" "DEFINER"
 	{
 		$$ = model.SecurityDefiner
 	}
@@ -13178,7 +13184,7 @@ RowStmt:
  *    https://dev.mysql.com/doc/refman/8.0/en/create-procedure.html
  *******************************************************************/
 CreateFunctionStmt:
-	"CREATE" "FUNCTION" FunctionName FunctionParameterOpt ReturnDataOpt CharacteristicOptionList RoutineBody
+	"CREATE" "FUNCTION" FunctionName FunctionParameterOpt ReturnDataOpt CharacteristicOptionList
 	{
 		x := &ast.CreateFunctionStmt{
 			Name: $3.(*ast.TableName),
@@ -13218,10 +13224,7 @@ CharacteristicOptionList:
 	}
 
 CharacteristicOption:
-	{
-		$$ = nil
-	}
-|	"COMMENT" stringLit
+	"COMMENT" stringLit
 	{
 		$$ = &ast.CharacteristicOption{
 			Comment: $2,
@@ -13233,7 +13236,9 @@ CharacteristicOption:
 			Deterministic: $1.(bool),
 		}
 	}
-|	ViewSQLSecurity
+|	"MODIFY" "SQL" "DATA"
+	{}
+|	SQLSecurity
 	{
 		$$ = &ast.CharacteristicOption{
 			Security: $1.(model.ViewSecurity),
