@@ -115,6 +115,9 @@ import (
 	deleteKwd         "DELETE"
 	denseRank         "DENSE_RANK"
 	desc              "DESC"
+	deterministic     "DETERMINISTIC"
+	modifies          "MODIFIES"
+	reads             "READS"
 	describe          "DESCRIBE"
 	distinct          "DISTINCT"
 	distinctRow       "DISTINCTROW"
@@ -149,6 +152,7 @@ import (
 	ifKwd             "IF"
 	ignore            "IGNORE"
 	in                "IN"
+	inout             "INOUT"
 	index             "INDEX"
 	infile            "INFILE"
 	inner             "INNER"
@@ -207,6 +211,7 @@ import (
 	or                "OR"
 	order             "ORDER"
 	outer             "OUTER"
+	out               "OUT"
 	over              "OVER"
 	partition         "PARTITION"
 	percentRank       "PERCENT_RANK"
@@ -512,6 +517,8 @@ import (
 	recover               "RECOVER"
 	redundant             "REDUNDANT"
 	reload                "RELOAD"
+	returns               "RETURNS"
+	contains              "CONTAINS"
 	remove                "REMOVE"
 	reorganize            "REORGANIZE"
 	repair                "REPAIR"
@@ -821,6 +828,9 @@ import (
 	AlterImportStmt        "ALTER IMPORT statement"
 	AlterInstanceStmt      "Alter instance statement"
 	AlterSequenceStmt      "Alter sequence statement"
+	AlterFunctionStmt      "Alter function statement"
+	AlterProcedureStmt     "Alter procedure statement"
+	AlterViewStmt          "Alter view statement"
 	AnalyzeTableStmt       "Analyze table statement"
 	BeginTransactionStmt   "BEGIN TRANSACTION statement"
 	BinlogStmt             "Binlog base64 statement"
@@ -836,10 +846,14 @@ import (
 	CreateBindingStmt      "CREATE BINDING  statement"
 	CreateSequenceStmt     "CREATE SEQUENCE statement"
 	CreateStatisticsStmt   "CREATE STATISTICS statement"
+	CreateFunctionStmt     "CREATE FUNCTION statement"
+	CreateProcedureStmt    "CREATE PROCEDURE statement"
 	DoStmt                 "Do statement"
 	DropDatabaseStmt       "DROP DATABASE statement"
 	DropImportStmt         "DROP IMPORT statement"
 	DropIndexStmt          "DROP INDEX statement"
+	DropFunctionStmt       "DROP FUNCTION statement"
+	DropProcedureStmt      "DROP PROCEDURE statement"
 	DropStatisticsStmt     "DROP STATISTICS statement"
 	DropStatsStmt          "DROP STATS statement"
 	DropTableStmt          "DROP TABLE statement"
@@ -926,6 +940,8 @@ import (
 	ClearPasswordExpireOptions             "Clear password expire options"
 	ColumnDef                              "table column definition"
 	ColumnDefList                          "table column definition list"
+	FunctionColumnDefList                  "function column definition list"
+	FunctionColumnDef                      "function column definition"
 	ColumnName                             "column name"
 	ColumnNameOrUserVariable               "column name or user variable"
 	ColumnNameList                         "column name list"
@@ -984,6 +1000,19 @@ import (
 	FieldItem                              "Field item for load data clause"
 	FieldItemList                          "Field items for load data clause"
 	FuncDatetimePrec                       "Function datetime precision"
+	FunctionName                           "Function name"
+	StoreDefiner                           "Function or Procedure definer"
+	FunctionParameterOpt                   "Function column definition list option"
+	ProcedureParameterOpt                  "Procedure column definition list option"
+	ProcedureName                          "Procedure name"
+	ProcedureColumnDefList                 "Procedure column definition list"
+	ProcedureColumnDef                     "Procedure column definition"
+	ReturnDataOpt                          "Function return data opt"
+	CharacteristicOptionList               "Function or Procedure characteristic option list"
+	CharacteristicOption                   "Function or Procedure characteristic option"
+	DeterministicOrNotOp                   "Deterministic or not"
+	CharacteristicSQLType                  "Function or Procedure characteristic sql type"
+	RoutineBody                            "Function or Procedure routine body"
 	GetFormatSelector                      "{DATE|DATETIME|TIME|TIMESTAMP}"
 	GlobalScope                            "The scope of variable"
 	GroupByClause                          "GROUP BY clause"
@@ -1185,6 +1214,7 @@ import (
 	ViewName                               "view name"
 	ViewFieldList                          "create view statement field list"
 	ViewSQLSecurity                        "view sql security"
+	SQLSecurity                            "sql security"
 	WhereClause                            "WHERE clause"
 	WhereClauseOptional                    "Optional WHERE clause"
 	WhenClause                             "When clause"
@@ -1357,6 +1387,8 @@ import (
 	TextString                      "text string item"
 
 %precedence empty
+%precedence lowerThanDefiner
+%precedence definer
 %precedence lowerThanSelectOpt
 %precedence sqlBufferResult
 %precedence sqlBigResult
@@ -4000,6 +4032,32 @@ LikeTableWithOrWithoutParen:
 		$$ = $3
 	}
 
+AlterViewStmt:
+	"ALTER" ViewAlgorithm ViewDefiner ViewSQLSecurity "VIEW" ViewName ViewFieldList "AS" CreateViewSelectOpt ViewCheckOption
+	{
+		startOffset := parser.startOffset(&yyS[yypt-1])
+		selStmt := $9.(ast.StmtNode)
+		selStmt.SetText(strings.TrimSpace(parser.src[startOffset:]))
+		x := &ast.AlterViewStmt{
+			ViewName:  $6.(*ast.TableName),
+			Select:    selStmt,
+			Algorithm: $2.(model.ViewAlgorithm),
+			Definer:   $3.(*auth.UserIdentity),
+			Security:  $4.(model.ViewSecurity),
+		}
+		if $7 != nil {
+			x.Cols = $7.([]model.CIStr)
+		}
+		if $10 != nil {
+			x.CheckOption = $10.(model.ViewCheckOption)
+			endOffset := parser.startOffset(&yyS[yypt])
+			selStmt.SetText(strings.TrimSpace(parser.src[startOffset:endOffset]))
+		} else {
+			x.CheckOption = model.CheckOptionCascaded
+		}
+		$$ = x
+	}
+
 /*******************************************************************
  *
  *  Create View Statement
@@ -4036,7 +4094,7 @@ CreateViewStmt:
 	}
 
 OrReplace:
-	/* EMPTY */
+	/* EMPTY */ %prec lowerThanDefiner
 	{
 		$$ = false
 	}
@@ -4046,7 +4104,7 @@ OrReplace:
 	}
 
 ViewAlgorithm:
-	/* EMPTY */
+	/* EMPTY */ %prec lowerThanDefiner
 	{
 		$$ = model.AlgorithmUndefined
 	}
@@ -4114,6 +4172,10 @@ ViewCheckOption:
 	/* EMPTY */
 	{
 		$$ = nil
+	}
+|	"WITH" "CHECK" "OPTION"
+	{
+		$$ = model.CheckOptionCascaded
 	}
 |	"WITH" "CASCADED" "CHECK" "OPTION"
 	{
@@ -5740,6 +5802,8 @@ UnReservedKeyword:
 |	"CLIENT"
 |	"SLAVE"
 |	"RELOAD"
+|	"RETURNS"
+|	"CONTAINS"
 |	"TEMPORARY"
 |	"ROUTINE"
 |	"EVENT"
@@ -10506,6 +10570,9 @@ Statement:
 |	AlterImportStmt
 |	AlterInstanceStmt
 |	AlterSequenceStmt
+|	AlterFunctionStmt
+|	AlterViewStmt
+|	AlterProcedureStmt
 |	AnalyzeTableStmt
 |	BeginTransactionStmt
 |	BinlogStmt
@@ -10525,11 +10592,15 @@ Statement:
 |	CreateRoleStmt
 |	CreateBindingStmt
 |	CreateSequenceStmt
+|	CreateFunctionStmt
+|	CreateProcedureStmt
 |	CreateStatisticsStmt
 |	DoStmt
 |	DropDatabaseStmt
 |	DropImportStmt
 |	DropIndexStmt
+|	DropProcedureStmt
+|	DropFunctionStmt
 |	DropTableStmt
 |	DropSequenceStmt
 |	DropViewStmt
@@ -13132,5 +13203,388 @@ RowStmt:
 	"ROW" RowValue
 	{
 		$$ = &ast.RowExpr{Values: $2.([]ast.ExprNode)}
+	}
+
+/********************************************************************
+ * Create Procedure Statement
+ *
+ * CREATE
+ *     [DEFINER = user]
+ *     FUNCTION sp_name ([proc_parameter[,...]])
+ *     RETURNS type
+ *     [characteristic ...] routine_body
+ *
+ * proc_parameter:
+ *     [ IN | OUT | INOUT ] param_name type
+ *
+ * type:
+ *     Any valid MySQL data type
+ *
+ * characteristic: {
+ *     COMMENT 'string'
+ *   | LANGUAGE SQL
+ *   | [NOT] DETERMINISTIC
+ *   | { CONTAINS SQL | NO SQL | READS SQL DATA | MODIFIES SQL DATA }
+ *   | SQL SECURITY { DEFINER | INVOKER }
+ * }
+ *
+ * routine_body:
+ *     Valid SQL routine statement
+ *
+ * Ref:
+ *    https://dev.mysql.com/doc/refman/8.0/en/create-procedure.html
+
+tmp: 
+	"CREATE" StoreDefiner "PROCEDURE" ProcedureName ProcedureParameterOpt CharacteristicOptionList RoutineBody
+ *******************************************************************/
+CreateProcedureStmt:
+	"CREATE" StoreDefiner "PROCEDURE" ProcedureName ProcedureParameterOpt CharacteristicOptionList
+	{
+		x := &ast.CreateProcedureStmt{
+			Definer: $2.(*auth.UserIdentity),
+			Name:    $4.(*ast.TableName),
+			Args:    $5.([]*ast.ColumnDef),
+		}
+		if $6 != nil {
+			x.Characteristic = $6.(*ast.CharacteristicOption)
+		}
+		$$ = x
+		yylex.AppendError(yylex.Errorf("TiDB doesn't support FUNCTION, FUNCTION will be parsed but ignored."))
+		parser.lastErrorAsWarn()
+	}
+
+ProcedureName:
+	TableName
+
+ProcedureParameterOpt:
+	/* empty */
+	{
+		$$ = make([]*ast.ColumnDef, 0, 1)
+	}
+|	'(' ProcedureColumnDefList ')'
+	{
+		$$ = $2.([]*ast.ColumnDef)
+	}
+
+ProcedureColumnDefList:
+	ProcedureColumnDef
+	{
+		$$ = []*ast.ColumnDef{$1.(*ast.ColumnDef)}
+	}
+|	ProcedureColumnDefList ',' ProcedureColumnDef
+	{
+		$$ = append($1.([]*ast.ColumnDef), $3.(*ast.ColumnDef))
+	}
+
+ProcedureColumnDef:
+	"IN" ColumnName Type
+	{
+		colDef := &ast.ColumnDef{Name: $2.(*ast.ColumnName), Tp: $3.(*types.FieldType), ProcedureType: ast.ProcedureParameterTypeIn}
+		$$ = colDef
+	}
+|	"OUT" ColumnName Type
+	{
+		colDef := &ast.ColumnDef{Name: $2.(*ast.ColumnName), Tp: $3.(*types.FieldType), ProcedureType: ast.ProcedureParameterTypeOut}
+		$$ = colDef
+	}
+|	"INOUT" ColumnName Type
+	{
+		colDef := &ast.ColumnDef{Name: $2.(*ast.ColumnName), Tp: $3.(*types.FieldType), ProcedureType: ast.ProcedureParameterTypeInOut}
+		$$ = colDef
+	}
+
+/********************************************************************
+ * Create Function Statement
+ *
+ * CREATE
+ *     [DEFINER = user]
+ *     FUNCTION sp_name ([func_parameter[,...]])
+ *     RETURNS type
+ *     [characteristic ...] routine_body
+ *
+ * func_parameter:
+ *     param_name type
+ *
+ * type:
+ *     Any valid MySQL data type
+ *
+ * characteristic: {
+ *     COMMENT 'string'
+ *   | LANGUAGE SQL
+ *   | [NOT] DETERMINISTIC
+ *   | { CONTAINS SQL | NO SQL | READS SQL DATA | MODIFIES SQL DATA }
+ *   | SQL SECURITY { DEFINER | INVOKER }
+ * }
+ *
+ * routine_body:
+ *     Valid SQL routine statement
+ *
+ * Ref:
+ *    https://dev.mysql.com/doc/refman/8.0/en/create-procedure.html
+
+ 	"CREATE" StoreDefiner "FUNCTION" FunctionName FunctionParameterOpt ReturnDataOpt CharacteristicOptionList RoutineBody
+ *******************************************************************/
+CreateFunctionStmt:
+	"CREATE" StoreDefiner "FUNCTION" FunctionName FunctionParameterOpt ReturnDataOpt CharacteristicOptionList RoutineBody
+	{
+		x := &ast.CreateFunctionStmt{
+			Definer: $2.(*auth.UserIdentity),
+			Name:    $4.(*ast.TableName),
+			Args:    $5.([]*ast.ColumnDef),
+			Rtp:     $6.(*types.FieldType),
+			Body:    $8.(ast.StmtNode),
+		}
+		if $7 != nil {
+			x.Characteristic = $7.(*ast.CharacteristicOption)
+		}
+		$$ = x
+		yylex.AppendError(yylex.Errorf("TiDB doesn't support FUNCTION, FUNCTION will be parsed but ignored."))
+		parser.lastErrorAsWarn()
+	}
+
+StoreDefiner:
+	/* EMPTY */
+	{
+		$$ = &auth.UserIdentity{CurrentUser: true}
+	}
+|	"DEFINER" "=" Username
+	{
+		$$ = $3
+	}
+
+RoutineBody:
+	SelectStmt
+	{
+		$$ = $1
+	}
+|	InsertIntoStmt
+	{
+		$$ = $1
+	}
+
+CharacteristicOptionList:
+	/* empty */
+	{
+		$$ = nil
+	}
+|	CharacteristicOptionList CharacteristicOption
+	{
+		// Merge the options
+		if $1 == nil {
+			$$ = $2
+		} else {
+			opt1 := $1.(*ast.CharacteristicOption)
+			opt2 := $2.(*ast.CharacteristicOption)
+			if len(opt2.Comment) > 0 {
+				opt1.Comment = opt2.Comment
+			} else if opt2.LanguageSQL {
+				opt1.LanguageSQL = opt2.LanguageSQL
+			} else if opt2.Deterministic != ast.DeterministicTypeNone {
+				opt1.Deterministic = opt2.Deterministic
+			} else if opt2.SQLType != ast.CharacteristicSQLTypeNone {
+				opt1.SQLType = opt2.SQLType
+			} else if opt2.Security != ast.SQLSecurityTypeNone {
+				opt1.Security = opt2.Security
+			}
+			$$ = opt1
+		}
+	}
+
+CharacteristicOption:
+	"COMMENT" stringLit
+	{
+		$$ = &ast.CharacteristicOption{
+			Comment: $2,
+		}
+	}
+|	"LANGUAGE" "SQL"
+	{
+		$$ = &ast.CharacteristicOption{
+			LanguageSQL: true,
+		}
+	}
+|	DeterministicOrNotOp
+	{
+		$$ = &ast.CharacteristicOption{
+			Deterministic: $1.(ast.DeterministicType),
+		}
+	}
+|	CharacteristicSQLType
+	{
+		$$ = &ast.CharacteristicOption{
+			SQLType: $1.(ast.CharacteristicSQLType),
+		}
+	}
+|	SQLSecurity
+	{
+		$$ = &ast.CharacteristicOption{
+			Security: $1.(ast.SQLSecurityType),
+		}
+	}
+
+SQLSecurity:
+	"SQL" "SECURITY" "DEFINER"
+	{
+		$$ = ast.SQLSecurityTypeDefiner
+	}
+|	"SQL" "SECURITY" "INVOKER"
+	{
+		$$ = ast.SQLSecurityTypeInvoker
+	}
+
+CharacteristicSQLType:
+	"CONTAINS" "SQL"
+	{
+		$$ = ast.CharacteristicSQLTypeContainsSQL
+	}
+|	"NO" "SQL"
+	{
+		$$ = ast.CharacteristicSQLTypeNoSQL
+	}
+|	"READS" "SQL" "DATA"
+	{
+		$$ = ast.CharacteristicSQLTypeReadSQLData
+	}
+|	"MODIFIES" "SQL" "DATA"
+	{
+		$$ = ast.CharacteristicSQLTypeModifiesSQLData
+	}
+
+DeterministicOrNotOp:
+	"DETERMINISTIC"
+	{
+		$$ = ast.DeterministicTypeOp
+	}
+|	"NOT" "DETERMINISTIC"
+	{
+		$$ = ast.DeterministicTypeNotOp
+	}
+
+FunctionName:
+	TableName
+
+FunctionParameterOpt:
+	/* empty */
+	{
+		$$ = make([]*ast.ColumnDef, 0, 1)
+	}
+|	'(' FunctionColumnDefList ')'
+	{
+		$$ = $2.([]*ast.ColumnDef)
+	}
+
+FunctionColumnDefList:
+	FunctionColumnDef
+	{
+		$$ = []*ast.ColumnDef{$1.(*ast.ColumnDef)}
+	}
+|	FunctionColumnDefList ',' FunctionColumnDef
+	{
+		$$ = append($1.([]*ast.ColumnDef), $3.(*ast.ColumnDef))
+	}
+
+FunctionColumnDef:
+	ColumnName Type
+	{
+		colDef := &ast.ColumnDef{Name: $1.(*ast.ColumnName), Tp: $2.(*types.FieldType)}
+		$$ = colDef
+	}
+
+ReturnDataOpt:
+	"RETURNS" Type
+	{
+		$$ = $2.(*types.FieldType)
+	}
+
+/********************************************************************
+ * Drop Function Statement
+ *
+ * DROP {PROCEDURE | FUNCTION} [IF EXISTS] sp_name
+ *
+ * Ref:
+ *    https://dev.mysql.com/doc/refman/8.0/en/drop-procedure.html
+ *******************************************************************/
+DropFunctionStmt:
+	"DROP" "FUNCTION" IfExists FunctionName
+	{
+		$$ = &ast.DropFunctionStmt{
+			IfExists: $3.(bool),
+			Name:     $4.(*ast.TableName),
+		}
+	}
+
+/********************************************************************
+ * Drop Function Statement
+ *
+ * DROP {PROCEDURE | FUNCTION} [IF EXISTS] sp_name
+ *
+ * Ref:
+ *    https://dev.mysql.com/doc/refman/8.0/en/drop-procedure.html
+ *******************************************************************/
+DropProcedureStmt:
+	"DROP" "PROCEDURE" IfExists ProcedureName
+	{
+		$$ = &ast.DropProcedureStmt{
+			IfExists: $3.(bool),
+			Name:     $4.(*ast.TableName),
+		}
+	}
+
+/********************************************************************
+ * Alter Function Statement
+ *
+ * ALTER FUNCTION func_name [characteristic ...]
+ * 
+ * characteristic: {
+ *     COMMENT 'string'
+ *   | LANGUAGE SQL
+ *   | { CONTAINS SQL | NO SQL | READS SQL DATA | MODIFIES SQL DATA }
+ *   | SQL SECURITY { DEFINER | INVOKER }
+ * }
+ *
+ * Ref:
+ *    https://dev.mysql.com/doc/refman/8.0/en/alter-function.html
+ *******************************************************************/
+AlterFunctionStmt:
+	"ALTER" "FUNCTION" FunctionName CharacteristicOptionList
+	{
+		tmp := &ast.AlterFunctionStmt{
+			Name: $3.(*ast.TableName),
+		}
+		if $4 != nil {
+			tmp.Characteristic = $4.(*ast.CharacteristicOption)
+		}
+		$$ = tmp
+		yylex.AppendError(yylex.Errorf("TiDB doesn't support FUNCTION, FUNCTION will be parsed but ignored."))
+		parser.lastErrorAsWarn()
+	}
+
+/********************************************************************
+ * Alter Procedure Statement
+ *
+ * ALTER PROCEDURE proc_name [characteristic ...]
+ * 
+ * characteristic: {
+ *     COMMENT 'string'
+ *   | LANGUAGE SQL
+ *   | { CONTAINS SQL | NO SQL | READS SQL DATA | MODIFIES SQL DATA }
+ *   | SQL SECURITY { DEFINER | INVOKER }
+ * }
+ *
+ * Ref:
+ *    https://dev.mysql.com/doc/refman/8.0/en/alter-procedure.html
+ *******************************************************************/
+AlterProcedureStmt:
+	"ALTER" "PROCEDURE" ProcedureName CharacteristicOptionList
+	{
+		x := &ast.AlterProcedureStmt{
+			Name: $3.(*ast.TableName),
+		}
+		if $4 != nil {
+			x.Characteristic = $4.(*ast.CharacteristicOption)
+		}
+		$$ = x
+		yylex.AppendError(yylex.Errorf("TiDB doesn't support PROCEDURE, PROCEDURE will be parsed but ignored."))
+		parser.lastErrorAsWarn()
 	}
 %%

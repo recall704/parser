@@ -26,6 +26,9 @@ import (
 var (
 	_ DDLNode = &AlterTableStmt{}
 	_ DDLNode = &AlterSequenceStmt{}
+	_ DDLNode = &AlterFunctionStmt{}
+	_ DDLNode = &AlterProcedureStmt{}
+	_ DDLNode = &AlterViewStmt{}
 	_ DDLNode = &CreateDatabaseStmt{}
 	_ DDLNode = &CreateIndexStmt{}
 	_ DDLNode = &CreateTableStmt{}
@@ -35,6 +38,8 @@ var (
 	_ DDLNode = &DropIndexStmt{}
 	_ DDLNode = &DropTableStmt{}
 	_ DDLNode = &DropSequenceStmt{}
+	_ DDLNode = &DropFunctionStmt{}
+	_ DDLNode = &DropProcedureStmt{}
 	_ DDLNode = &RenameTableStmt{}
 	_ DDLNode = &TruncateTableStmt{}
 	_ DDLNode = &RepairTableStmt{}
@@ -865,17 +870,37 @@ func (n *Constraint) Accept(v Visitor) (Node, bool) {
 	return v.Leave(n)
 }
 
+type ProcedureParameterType int
+
+const (
+	ProcedureParameterTypeNone ProcedureParameterType = iota
+	ProcedureParameterTypeIn
+	ProcedureParameterTypeOut
+	ProcedureParameterTypeInOut
+)
+
 // ColumnDef is used for parsing column definition from SQL.
 type ColumnDef struct {
 	node
 
-	Name    *ColumnName
-	Tp      *types.FieldType
-	Options []*ColumnOption
+	ProcedureType ProcedureParameterType
+	Name          *ColumnName
+	Tp            *types.FieldType
+	Options       []*ColumnOption
 }
 
 // Restore implements Node interface.
 func (n *ColumnDef) Restore(ctx *format.RestoreCtx) error {
+	switch n.ProcedureType {
+	case ProcedureParameterTypeNone:
+		// do nothing
+	case ProcedureParameterTypeIn:
+		ctx.WriteKeyWord("IN ")
+	case ProcedureParameterTypeOut:
+		ctx.WriteKeyWord("OUT ")
+	case ProcedureParameterTypeInOut:
+		ctx.WriteKeyWord("INOUT ")
+	}
 	if err := n.Name.Restore(ctx); err != nil {
 		return errors.Annotate(err, "An error occurred while splicing ColumnDef Name")
 	}
@@ -3703,5 +3728,539 @@ func (n *AlterSequenceStmt) Accept(v Visitor) (Node, bool) {
 		return n, false
 	}
 	n.Name = node.(*TableName)
+	return v.Leave(n)
+}
+
+// CharacteristicSQLType is the type for Function or Procedure Characteristic SQL Type
+type CharacteristicSQLType int
+
+// CharacteristicSQLType types.
+const (
+	CharacteristicSQLTypeNone CharacteristicSQLType = iota
+	// CONTAINS SQL
+	CharacteristicSQLTypeContainsSQL
+	// NO SQL
+	CharacteristicSQLTypeNoSQL
+	//	READS SQL DATA
+	CharacteristicSQLTypeReadSQLData
+	// "MODIFIES" "SQL" "DATA"
+	CharacteristicSQLTypeModifiesSQLData
+)
+
+type DeterministicType int
+
+const (
+	DeterministicTypeNone DeterministicType = iota
+	DeterministicTypeOp
+	DeterministicTypeNotOp
+)
+
+type SQLSecurityType int
+
+const (
+	SQLSecurityTypeNone SQLSecurityType = iota
+	SQLSecurityTypeDefiner
+	SQLSecurityTypeInvoker
+)
+
+// CharacteristicOption ...
+// CharacteristicOption for function or procedure
+type CharacteristicOption struct {
+	node
+
+	Comment       string
+	LanguageSQL   bool
+	Deterministic DeterministicType
+	SQLType       CharacteristicSQLType
+	Security      SQLSecurityType
+}
+
+// Accept implements Node Accept interface.
+// Accept implements Node Accept interface.
+func (n *CharacteristicOption) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*CharacteristicOption)
+	return v.Leave(n)
+}
+
+// Restore implements Node interface.
+func (n *CharacteristicOption) Restore(ctx *format.RestoreCtx) error {
+	hasPrevOption := false
+	if n.Comment != "" {
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("COMMENT ")
+		ctx.WriteString(n.Comment)
+		hasPrevOption = true
+	}
+	if n.LanguageSQL {
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("LANGUAGE SQL")
+		hasPrevOption = true
+	}
+
+	switch n.Deterministic {
+	case DeterministicTypeNone:
+		// do nothing
+	case DeterministicTypeOp:
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("DETERMINISTIC")
+		hasPrevOption = true
+	case DeterministicTypeNotOp:
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("NOT DETERMINISTIC")
+		hasPrevOption = true
+	default:
+		return errors.Errorf("invalid CharacteristicOption Deterministic: %d", n.Deterministic)
+	}
+
+	switch n.SQLType {
+	case CharacteristicSQLTypeNone:
+		// do nothing
+	case CharacteristicSQLTypeContainsSQL:
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("CONTAINS SQL")
+		hasPrevOption = true
+	case CharacteristicSQLTypeNoSQL:
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("NO SQL")
+		hasPrevOption = true
+	case CharacteristicSQLTypeReadSQLData:
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("READS SQL DATA")
+	case CharacteristicSQLTypeModifiesSQLData:
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("MODIFIES SQL DATA")
+		hasPrevOption = true
+	default:
+		return errors.Errorf("invalid CharacteristicOption SQLType: %d", n.SQLType)
+	}
+
+	switch n.Security {
+	case SQLSecurityTypeNone:
+		// do nothing
+	case SQLSecurityTypeDefiner:
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("SQL SECURITY DEFINER")
+		hasPrevOption = true
+	case SQLSecurityTypeInvoker:
+		if hasPrevOption {
+			ctx.WritePlain(" ")
+		}
+		ctx.WriteKeyWord("SQL SECURITY INVOKER")
+		hasPrevOption = true
+	}
+
+	return nil
+}
+
+// CreateFunctionStmt is a statement to create a Function.
+type CreateFunctionStmt struct {
+	ddlNode
+
+	Definer        *auth.UserIdentity
+	IfNotExists    bool
+	Name           *TableName
+	Args           []*ColumnDef
+	Rtp            *types.FieldType
+	Characteristic *CharacteristicOption
+	Body           StmtNode
+}
+
+// Restore implements Node interface.
+func (n *CreateFunctionStmt) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("CREATE ")
+	if n.Definer != nil {
+		ctx.WriteKeyWord("DEFINER")
+		ctx.WritePlain(" = ")
+		if n.Definer.CurrentUser {
+			ctx.WriteKeyWord("current_user")
+		} else {
+			ctx.WriteName(n.Definer.Username)
+			if n.Definer.Hostname != "" {
+				ctx.WritePlain("@")
+				ctx.WriteName(n.Definer.Hostname)
+			}
+		}
+	}
+	ctx.WriteKeyWord(" FUNCTION ")
+	if n.IfNotExists {
+		ctx.WriteKeyWord("IF NOT EXISTS ")
+	}
+	if err := n.Name.Restore(ctx); err != nil {
+		return errors.Annotate(err, "An error occurred while create CreateFunctionStmt.Name")
+	}
+	if len(n.Args) > 0 {
+		ctx.WritePlain("(")
+		for i, col := range n.Args {
+			if i > 0 {
+				ctx.WritePlain(",")
+			}
+			if err := col.Restore(ctx); err != nil {
+				return errors.Annotatef(err, "An error occurred while splicing CreateFunctionStmt Args: [%v]", i)
+			}
+		}
+
+		ctx.WritePlain(")")
+	}
+	ctx.WritePlain(" RETURNS ")
+	if err := n.Rtp.Restore(ctx); err != nil {
+		return errors.Annotatef(err, "An error occurred while splicing CreateFunctionStmt Rtp: [%v]", n.Rtp)
+	}
+	if n.Characteristic != nil {
+		ctx.WritePlain(" ")
+		if err := n.Characteristic.Restore(ctx); err != nil {
+			return errors.Annotatef(err, "An error occurred while splicing CreateFunctionStmt Characteristic: [%v]", n.Characteristic)
+		}
+	}
+
+	if n.Body != nil {
+		// ctx.WriteKeyWord(" BEGIN ")
+		if err := n.Body.Restore(ctx); err != nil {
+			return errors.Annotatef(err, "An error occurred while splicing CreateFunctionStmt Body: [%v]", n.Body)
+		}
+		// ctx.WriteKeyWord(" END")
+	}
+
+	return nil
+}
+
+// Accept implements Node Accept interface.
+func (n *CreateFunctionStmt) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*CreateFunctionStmt)
+	node, ok := n.Name.Accept(v)
+	if !ok {
+		return n, false
+	}
+	n.Name = node.(*TableName)
+	return v.Leave(n)
+}
+
+type CreateProcedureStmt struct {
+	ddlNode
+
+	Definer        *auth.UserIdentity
+	IfNotExists    bool
+	Name           *TableName
+	Args           []*ColumnDef
+	Characteristic *CharacteristicOption
+	Body           StmtNode
+}
+
+func (n *CreateProcedureStmt) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*CreateProcedureStmt)
+	node, ok := n.Name.Accept(v)
+	if !ok {
+		return n, false
+	}
+	n.Name = node.(*TableName)
+	return v.Leave(n)
+}
+
+func (n *CreateProcedureStmt) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("CREATE ")
+	if n.Definer != nil {
+		ctx.WriteKeyWord("DEFINER")
+		ctx.WritePlain(" = ")
+		if n.Definer.CurrentUser {
+			ctx.WriteKeyWord("current_user")
+		} else {
+			ctx.WriteName(n.Definer.Username)
+			if n.Definer.Hostname != "" {
+				ctx.WritePlain("@")
+				ctx.WriteName(n.Definer.Hostname)
+			}
+		}
+	}
+	ctx.WriteKeyWord(" PROCEDURE ")
+	if n.IfNotExists {
+		ctx.WriteKeyWord("IF NOT EXISTS ")
+	}
+	if err := n.Name.Restore(ctx); err != nil {
+		return errors.Annotate(err, "An error occurred while create CreateProcedureStmt.Name")
+	}
+	if len(n.Args) > 0 {
+		ctx.WritePlain("(")
+		for i, col := range n.Args {
+			if i > 0 {
+				ctx.WritePlain(",")
+			}
+			if err := col.Restore(ctx); err != nil {
+				return errors.Annotatef(err, "An error occurred while splicing CreateProcedureStmt Args: [%v]", i)
+			}
+		}
+
+		ctx.WritePlain(")")
+	}
+	if n.Characteristic != nil {
+		ctx.WritePlain(" ")
+		if err := n.Characteristic.Restore(ctx); err != nil {
+			return errors.Annotatef(err, "An error occurred while splicing CreateProcedureStmt Characteristic: [%v]", n.Characteristic)
+		}
+	}
+
+	if n.Body != nil {
+		ctx.WriteKeyWord(" BEGIN ")
+		if err := n.Body.Restore(ctx); err != nil {
+			return errors.Annotatef(err, "An error occurred while splicing CreateProcedureStmt Body: [%v]", n.Body)
+		}
+		ctx.WriteKeyWord(" END")
+	}
+
+	return nil
+}
+
+type DropFunctionStmt struct {
+	ddlNode
+
+	IfExists bool
+	Name     *TableName
+}
+
+// Restore implements Node interface.
+func (n *DropFunctionStmt) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("DROP FUNCTION ")
+	if n.IfExists {
+		ctx.WriteKeyWord("IF EXISTS ")
+	}
+	if err := n.Name.Restore(ctx); err != nil {
+		return errors.Annotatef(err, "An error occurred while splicing DropFunctionStmt Name: [%v]", n.Name)
+	}
+
+	return nil
+}
+
+// Accept implements Node Accept interface.
+func (n *DropFunctionStmt) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*DropFunctionStmt)
+	node, ok := n.Name.Accept(v)
+	if !ok {
+		return n, false
+	}
+	n.Name = node.(*TableName)
+	return v.Leave(n)
+}
+
+type DropProcedureStmt struct {
+	ddlNode
+
+	IfExists bool
+	Name     *TableName
+}
+
+// Restore implements Node interface.
+func (n *DropProcedureStmt) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("DROP PROCEDURE ")
+	if n.IfExists {
+		ctx.WriteKeyWord("IF EXISTS ")
+	}
+	if err := n.Name.Restore(ctx); err != nil {
+		return errors.Annotatef(err, "An error occurred while splicing DropProcedureStmt Name: [%v]", n.Name)
+	}
+
+	return nil
+}
+
+// Accept implements Node Accept interface.
+func (n *DropProcedureStmt) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*DropProcedureStmt)
+	node, ok := n.Name.Accept(v)
+	if !ok {
+		return n, false
+	}
+	n.Name = node.(*TableName)
+	return v.Leave(n)
+}
+
+type AlterProcedureStmt struct {
+	ddlNode
+
+	Name           *TableName
+	Characteristic *CharacteristicOption
+}
+
+func (n *AlterProcedureStmt) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*AlterProcedureStmt)
+	node, ok := n.Name.Accept(v)
+	if !ok {
+		return n, false
+	}
+	n.Name = node.(*TableName)
+	return v.Leave(n)
+}
+func (n *AlterProcedureStmt) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("ALTER ")
+	ctx.WriteKeyWord("PROCEDURE ")
+	if err := n.Name.Restore(ctx); err != nil {
+		return errors.Annotate(err, "An error occurred while create AlterProcedureStmt.Name")
+	}
+	if n.Characteristic != nil {
+		ctx.WritePlain(" ")
+		if err := n.Characteristic.Restore(ctx); err != nil {
+			return errors.Annotatef(err, "An error occurred while splicing AlterProcedureStmt Characteristic: [%v]", n.Characteristic)
+		}
+	}
+	return nil
+}
+
+type AlterFunctionStmt struct {
+	ddlNode
+
+	Name           *TableName
+	Characteristic *CharacteristicOption
+}
+
+func (n *AlterFunctionStmt) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*AlterFunctionStmt)
+	node, ok := n.Name.Accept(v)
+	if !ok {
+		return n, false
+	}
+	n.Name = node.(*TableName)
+	return v.Leave(n)
+}
+func (n *AlterFunctionStmt) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("ALTER ")
+	ctx.WriteKeyWord("FUNCTION ")
+	if err := n.Name.Restore(ctx); err != nil {
+		return errors.Annotate(err, "An error occurred while create AlterFunctionStmt.Name")
+	}
+	if n.Characteristic != nil {
+		ctx.WritePlain(" ")
+		if err := n.Characteristic.Restore(ctx); err != nil {
+			return errors.Annotatef(err, "An error occurred while splicing AlterFunctionStmt Characteristic: [%v]", n.Characteristic)
+		}
+	}
+	return nil
+}
+
+type AlterViewStmt struct {
+	ddlNode
+
+	Algorithm   model.ViewAlgorithm
+	Definer     *auth.UserIdentity
+	Security    model.ViewSecurity
+	ViewName    *TableName
+	Cols        []model.CIStr
+	Select      StmtNode
+	SchemaCols  []model.CIStr
+	CheckOption model.ViewCheckOption
+}
+
+// Restore implements Node interface.
+func (n *AlterViewStmt) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("ALTER ")
+	ctx.WriteKeyWord("ALGORITHM")
+	ctx.WritePlain(" = ")
+	ctx.WriteKeyWord(n.Algorithm.String())
+	ctx.WriteKeyWord(" DEFINER")
+	ctx.WritePlain(" = ")
+
+	// todo Use n.Definer.Restore(ctx) to replace this part
+	if n.Definer.CurrentUser {
+		ctx.WriteKeyWord("current_user")
+	} else {
+		ctx.WriteName(n.Definer.Username)
+		if n.Definer.Hostname != "" {
+			ctx.WritePlain("@")
+			ctx.WriteName(n.Definer.Hostname)
+		}
+	}
+
+	ctx.WriteKeyWord(" SQL SECURITY ")
+	ctx.WriteKeyWord(n.Security.String())
+	ctx.WriteKeyWord(" VIEW ")
+
+	if err := n.ViewName.Restore(ctx); err != nil {
+		return errors.Annotate(err, "An error occurred while create AlterViewStmt.ViewName")
+	}
+
+	for i, col := range n.Cols {
+		if i == 0 {
+			ctx.WritePlain(" (")
+		} else {
+			ctx.WritePlain(",")
+		}
+		ctx.WriteName(col.O)
+		if i == len(n.Cols)-1 {
+			ctx.WritePlain(")")
+		}
+	}
+
+	ctx.WriteKeyWord(" AS ")
+
+	if err := n.Select.Restore(ctx); err != nil {
+		return errors.Annotate(err, "An error occurred while create AlterViewStmt.Select")
+	}
+
+	if n.CheckOption != model.CheckOptionCascaded {
+		ctx.WriteKeyWord(" WITH ")
+		ctx.WriteKeyWord(n.CheckOption.String())
+		ctx.WriteKeyWord(" CHECK OPTION")
+	}
+	return nil
+}
+
+// Accept implements Node Accept interface.
+func (n *AlterViewStmt) Accept(v Visitor) (Node, bool) {
+	newNode, skipChildren := v.Enter(n)
+	if skipChildren {
+		return v.Leave(newNode)
+	}
+	n = newNode.(*AlterViewStmt)
+	node, ok := n.ViewName.Accept(v)
+	if !ok {
+		return n, false
+	}
+	n.ViewName = node.(*TableName)
+	selnode, ok := n.Select.Accept(v)
+	if !ok {
+		return n, false
+	}
+	n.Select = selnode.(StmtNode)
 	return v.Leave(n)
 }
